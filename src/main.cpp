@@ -5,10 +5,6 @@
 #include <DHT.h>
 #include <HTTPClient.h>
 
-// ==============================================================================
-//  CONFIGURATION (REPLACE THESE WITH YOUR DETAILS)
-// ==============================================================================
-
 // Wi-Fi Credentials
 const char* ssid = "Abdulsalam";
 const char* password = "yinka8380";
@@ -45,9 +41,7 @@ void flashGreenLED();
 void callback(char* topic, byte* payload, unsigned int length);
 void sendTelemetryHTTP(String payload);
 
-// ==============================================================================
 // TIMERS & STATE VARIABLES (Non-Blocking)
-// ==============================================================================
 
 unsigned long previousMillisRed = 0;
 unsigned long previousMillisTelemetry = 0;
@@ -59,10 +53,8 @@ bool redLedState = LOW;
 WiFiClientSecure espClient; 
 PubSubClient client(espClient);
 
-// ==============================================================================
-// SETUP FUNCTION (Runs Once)
-// ==============================================================================
 
+// SETUP FUNCTION (Runs Once)
 void setup() {
   Serial.begin(115200);
 
@@ -164,14 +156,11 @@ void callback(char* topic, byte* payload, unsigned int length) {
 }
 
 // HTTP POST (Sends sensor data & receives dynamic timer updates)
-
 void sendTelemetryHTTP(String payload) {
   if (WiFi.status() == WL_CONNECTED) {
     HTTPClient http;
-    
     http.begin(backend_url); 
     http.addHeader("Content-Type", "application/json");
-
     Serial.println("Sending HTTP POST to Backend...");
     int httpResponseCode = http.POST(payload);
 
