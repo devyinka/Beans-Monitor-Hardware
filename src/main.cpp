@@ -80,6 +80,7 @@ void setup() {
   setup_wifi();
 
   // Configure MQTT
+  
   espClient.setInsecure(); // Skip certificate validation for local prototyping
   client.setServer(mqtt_server, mqtt_port);
   client.setCallback(callback); 
