@@ -1,24 +1,27 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include <WiFiMulti.h> 
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <DHT.h>
 #include <HTTPClient.h>
+#include "secrets.h" // Pulls in your hidden credentials
 
-// Wi-Fi Credentials
-const char* ssid = "Abdulsalam";
-const char* password = "yinka8380";
+// Wi-Fi Credentials (Loaded from secrets.h)
+const char* wifiname = SECRET_WIFI_NAME;
+const char* wifipassword = SECRET_WIFI_PASS;
+const char* mifiname = SECRET_MIFI_NAME;
+const char* mifipassword = SECRET_MIFI_PASS;
 
 // HiveMQ Credentials (For receiving remote pump commands)
 const char* mqtt_server = "135e2067aa8b40e7b8ee44698f52f249.s1.eu.hivemq.cloud"; 
 const int mqtt_port = 8883; 
-const char* mqtt_user = "devyinka8380";
-const char* mqtt_pass = "@Yinka8380";
+const char* mqtt_user = SECRET_MQTT_USER;
+const char* mqtt_pass = SECRET_MQTT_PASS;
 const char* topic_subscribe = "unit1/spraying"; 
 
 // Express Backend URL (For sending sensor data & getting dynamic timer updates)
 const String backend_url = "https://backend-beans-farm-pest-disease.onrender.com/sensor/saverawsensordata"; 
-// pollingRateMinutes
 
 // Actuators & Indicators
 #define RELAY_1_PIN 18   // D18 - Fungicide Pump (Disease)
@@ -35,6 +38,7 @@ const String backend_url = "https://backend-beans-farm-pest-disease.onrender.com
 #define DHTTYPE DHT22
 DHT dht(DHTPIN, DHTTYPE);
 
+// Function Declarations
 void setup_wifi();
 void reconnect();
 void flashGreenLED();
@@ -42,7 +46,6 @@ void callback(char* topic, byte* payload, unsigned int length);
 void sendTelemetryHTTP(String payload);
 
 // TIMERS & STATE VARIABLES (Non-Blocking)
-
 unsigned long previousMillisRed = 0;
 unsigned long previousMillisTelemetry = 0;
 const long redBlinkInterval = 1000;      // Red LED blinks every 1 second
@@ -52,7 +55,7 @@ bool redLedState = LOW;
 // Network Clients
 WiFiClientSecure espClient; 
 PubSubClient client(espClient);
-
+WiFiMulti wifiMulti; 
 
 // SETUP FUNCTION (Runs Once)
 void setup() {
@@ -80,28 +83,43 @@ void setup() {
   setup_wifi();
 
   // Configure MQTT
-  
-  espClient.setInsecure(); // Skip certificate validation for local prototyping
+  espClient.setInsecure(); // Skip certificate validation for prototyping
   client.setServer(mqtt_server, mqtt_port);
   client.setCallback(callback); 
 }
 
-//  NETWORK CONNECTION FUNCTIONS
+// NETWORK CONNECTION FUNCTIONS
 void setup_wifi() {
-  Serial.print("\nConnecting to WiFi: ");
-  Serial.println(ssid);
-  WiFi.begin(ssid, password);
+  Serial.println("\nInitializing WiFi Scan Matrix...");
+
+  // Register both AP profiles to memory
+  wifiMulti.addAP(wifiname, wifipassword);
+  wifiMulti.addAP(mifiname, mifipassword);
+
+  Serial.print("Connecting to strongest available network (Phone or MiFi)...");
   
-  while (WiFi.status() != WL_CONNECTED) {
+  // Scans and automatically picks the one that is active/stronger
+  while (wifiMulti.run() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
   }
-  Serial.println("\nWiFi connected! IP Address: ");
+
+  Serial.println("\nWiFi connected successfully!");
+  Serial.print("Active SSID: ");
+  Serial.println(WiFi.SSID());
+  Serial.print("IP Address: ");
   Serial.println(WiFi.localIP());
 }
 
 void reconnect() {
   while (!client.connected()) {
+    // Before attempting MQTT, make sure Wi-Fi didn't drop out completely
+    if (wifiMulti.run() != WL_CONNECTED) {
+      Serial.println("WiFi lost during MQTT reconnect. Re-verifying network...");
+      delay(2000);
+      continue;
+    }
+
     Serial.print("Attempting MQTT connection...");
     String clientId = "ESP32Client-" + String(random(0xffff), HEX);
     
@@ -111,7 +129,7 @@ void reconnect() {
     } else {
       Serial.print("Failed, rc=");
       Serial.print(client.state());
-      Serial.println(" try again in 5 seconds");
+      Serial.println(" trying again in 5 seconds");
       delay(5000);
     }
   }
@@ -124,19 +142,20 @@ void flashGreenLED() {
   digitalWrite(GREEN_LED_PIN, LOW);
 }
 
-//  MQTT CALLBACK (Receives pump commands from Web App)
+// MQTT CALLBACK (Receives pump commands from Web App)
 void callback(char* topic, byte* payload, unsigned int length) {
-  flashGreenLED(); // Flash green on incoming command
+  flashGreenLED(); 
 
-  String messageTemp;
+  String incomingJsonString; 
+  
   for (int i = 0; i < length; i++) {
-    messageTemp += (char)payload[i];
+    incomingJsonString += (char)payload[i];
   }
   
-  Serial.println("MQTT Received: " + messageTemp);
+  Serial.println("MQTT Received: " + incomingJsonString);
 
   StaticJsonDocument<200> doc;
-  DeserializationError error = deserializeJson(doc, messageTemp);
+  DeserializationError error = deserializeJson(doc, incomingJsonString);
   
   if (error) {
     Serial.println("JSON Parse failed.");
@@ -145,20 +164,35 @@ void callback(char* topic, byte* payload, unsigned int length) {
 
   String status = doc["status"];
   bool action = doc["action"]; 
-
+  
   if (status == "disease") {
-    Serial.println(action ? "Spraying Fungicide!" : "Stopping Fungicide.");
-    digitalWrite(RELAY_1_PIN, action ? LOW : HIGH);
+    if (action == true) {
+      Serial.println("Spraying Fungicide! (Forcing Pesticide OFF for safety)");
+      digitalWrite(RELAY_2_PIN, HIGH); 
+      delay(50);                       
+      digitalWrite(RELAY_1_PIN, LOW);  
+    } else {
+      Serial.println("Stopping Fungicide.");
+      digitalWrite(RELAY_1_PIN, HIGH);
+    }
   } 
   else if (status == "pest") {
-    Serial.println(action ? "Spraying Pesticide!" : "Stopping Pesticide.");
-    digitalWrite(RELAY_2_PIN, action ? LOW : HIGH);
+    if (action == true) {
+      Serial.println("Spraying Pesticide! (Forcing Fungicide OFF for safety)");
+      digitalWrite(RELAY_1_PIN, HIGH); 
+      delay(50);                       
+      digitalWrite(RELAY_2_PIN, LOW);  
+    } else {
+      Serial.println("Stopping Pesticide.");
+      digitalWrite(RELAY_2_PIN, HIGH);
+    }
   }
 }
 
 // HTTP POST (Sends sensor data & receives dynamic timer updates)
 void sendTelemetryHTTP(String payload) {
-  if (WiFi.status() == WL_CONNECTED) {
+  // wifiMulti.run() automatically checks health and hooks back up if disconnected
+  if (wifiMulti.run() == WL_CONNECTED) {
     HTTPClient http;
     http.begin(backend_url); 
     http.addHeader("Content-Type", "application/json");
@@ -172,9 +206,9 @@ void sendTelemetryHTTP(String payload) {
       StaticJsonDocument<200> responseDoc;
       DeserializationError error = deserializeJson(responseDoc, responseString);
 
-      // If the backend replies with a new interval, update the timer instantly
+      // Extract runtime update for telemetry clock if supplied by backend
       if (!error && responseDoc.containsKey("pollingRateMinutes")) {
-      long newIntervalSec = responseDoc["pollingRateMinutes"].as<long>() * 60;
+        long newIntervalSec = responseDoc["pollingRateMinutes"].as<long>() * 60;
         telemetryInterval = newIntervalSec * 1000; 
         Serial.printf("SUCCESS: Timer remotely updated to %ld seconds.\n", newIntervalSec);
       }
@@ -184,7 +218,7 @@ void sendTelemetryHTTP(String payload) {
     
     http.end(); 
   } else {
-    Serial.println("WiFi Disconnected!");
+    Serial.println("WiFi Disconnected! Skipping telemetry transmission.");
   }
 }
 
@@ -193,18 +227,18 @@ void loop() {
   if (!client.connected()) {
     reconnect();
   }
-  client.loop(); // Listen continuously for incoming MQTT commands
+  client.loop(); // Handle incoming MQTT subscriptions
 
   unsigned long currentMillis = millis();
 
-  //  NON-BLOCKING RED LED (System Working Heartbeat)
+  // NON-BLOCKING RED LED (System Working Heartbeat)
   if (currentMillis - previousMillisRed >= redBlinkInterval) {
     previousMillisRed = currentMillis;
     redLedState = !redLedState;
     digitalWrite(RED_LED_PIN, redLedState);
   }
 
-  //  NON-BLOCKING TELEMETRY (Dynamic HTTP Interval)
+  // NON-BLOCKING TELEMETRY (Dynamic HTTP Interval)
   if (currentMillis - previousMillisTelemetry >= telemetryInterval) {
     previousMillisTelemetry = currentMillis;
     
@@ -219,9 +253,10 @@ void loop() {
     int soilPct = map(soilRaw, 4095, 0, 0, 100); 
     int ldrPct = map(ldrRaw, 4095, 0, 0, 100);
     int rainIntensityPct = map(rainRaw, 4095, 0, 0, 100);
-    // Build JSON Payload EXACTLY matching Express req.body destructuring
+
+    // Build JSON Payload
     StaticJsonDocument<256> doc;
-    doc["machine_location"] = "unit1"; // Update to match your DB node name
+    doc["machine_location"] = "unit1"; 
     doc["temperature"] = temp;
     doc["humidity"] = hum;
     doc["soil_moisture"] = soilPct;
@@ -231,7 +266,7 @@ void loop() {
     String payload;
     serializeJson(doc, payload);
 
-    flashGreenLED(); // Flash green right before transmitting
+    flashGreenLED(); // Visual alert right before outputting
     sendTelemetryHTTP(payload); 
   }
 }
